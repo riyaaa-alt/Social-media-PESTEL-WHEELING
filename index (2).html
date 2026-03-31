@@ -1,0 +1,288 @@
+
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: var(--font-sans, sans-serif); background: transparent; }
+.wrap { padding: 12px 0 0; }
+.tabs { display: flex; gap: 6px; padding: 0 12px 12px; }
+.tab { font-size: 12px; padding: 5px 14px; border-radius: 20px; border: 0.5px solid var(--color-border-secondary); background: transparent; cursor: pointer; color: var(--color-text-secondary); font-family: inherit; transition: all 0.15s; }
+.tab.active { background: var(--color-text-primary); color: var(--color-background-primary); border-color: transparent; }
+.view { display: none; }
+.view.active { display: block; }
+.stats-grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 8px; padding: 0 12px 16px; }
+.stat { background: var(--color-background-secondary); border-radius: var(--border-radius-md); padding: 10px 12px; }
+.stat-val { font-size: 22px; font-weight: 500; color: var(--color-text-primary); }
+.stat-lab { font-size: 11px; color: var(--color-text-secondary); margin-top: 2px; }
+#chord-wrap { padding: 0 12px; }
+#bar-wrap { padding: 0 12px; }
+</style>
+
+<div class="wrap">
+<div class="tabs">
+  <button class="tab active" onclick="switchTab('chord')">Chord diagram</button>
+  <button class="tab" onclick="switchTab('bars')">Bar chart</button>
+  <button class="tab" onclick="switchTab('matrix')">Heat matrix</button>
+</div>
+
+<div class="stats-grid">
+  <div class="stat"><div class="stat-val">55</div><div class="stat-lab">Total cross-links mapped</div></div>
+  <div class="stat"><div class="stat-val">15</div><div class="stat-lab">Domain-pair combinations</div></div>
+  <div class="stat"><div class="stat-val">T→S</div><div class="stat-lab">Strongest link (8 ties)</div></div>
+</div>
+
+<div id="view-chord" class="view active">
+  <div id="chord-wrap"></div>
+</div>
+<div id="view-bars" class="view">
+  <div id="bar-wrap">
+    <div style="position:relative;width:100%;height:420px;"><canvas id="barChart"></canvas></div>
+  </div>
+</div>
+<div id="view-matrix" class="view">
+  <div id="matrix-wrap" style="padding:0 12px;"></div>
+</div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script>
+const DOMAINS = [
+  { key:"P", label:"Political",      color:"#7C3AED" },
+  { key:"T", label:"Technology",     color:"#BE185D" },
+  { key:"E", label:"Economic",       color:"#B45309" },
+  { key:"S", label:"Social",         color:"#047857" },
+  { key:"L", label:"Legal",          color:"#0369A1" },
+  { key:"V", label:"Environmental",  color:"#15803D" }
+];
+
+const LINKS = {
+  "P-T": 8, "P-S": 5, "P-L": 4, "P-E": 3, "P-V": 0,
+  "T-E": 6, "T-S": 8, "T-L": 4, "T-V": 3,
+  "E-S": 3, "E-L": 2, "E-V": 2,
+  "S-L": 3, "S-V": 3,
+  "L-V": 0
+};
+
+function getCount(a, b) {
+  return LINKS[`${a}-${b}`] ?? LINKS[`${b}-${a}`] ?? 0;
+}
+
+function getDomainTotal(key) {
+  return DOMAINS.reduce((s, d) => d.key !== key ? s + getCount(key, d.key) : s, 0);
+}
+
+function switchTab(t) {
+  document.querySelectorAll('.tab').forEach((b,i) => b.classList.toggle('active', ['chord','bars','matrix'][i]===t));
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.getElementById('view-'+t).classList.add('active');
+  if (t==='bars' && !window._barDrawn) { drawBar(); window._barDrawn=true; }
+  if (t==='matrix' && !window._matrixDrawn) { drawMatrix(); window._matrixDrawn=true; }
+}
+
+function drawChord() {
+  const W = document.getElementById('chord-wrap').clientWidth || 580;
+  const H = Math.min(W, 460);
+  const cx = W/2, cy = H/2, R = Math.min(cx,cy) - 70;
+
+  const svg = document.createElementNS("http://www.w3.org/2000/svg","svg");
+  svg.setAttribute("viewBox",`0 0 ${W} ${H}`);
+  svg.setAttribute("width","100%");
+  svg.style.display="block";
+
+  const n = DOMAINS.length;
+  const gap = 0.04;
+  const totals = DOMAINS.map(d => Math.max(getDomainTotal(d.key),1));
+  const totalSum = totals.reduce((a,b)=>a+b,0);
+  const arcAngles = totals.map(t => (t/totalSum) * (Math.PI*2 - n*gap));
+
+  const starts = [];
+  let cur = -Math.PI/2;
+  DOMAINS.forEach((d,i) => {
+    starts.push(cur);
+    cur += arcAngles[i] + gap;
+  });
+
+  function arcMid(i) {
+    return starts[i] + arcAngles[i]/2;
+  }
+  function ptOnArc(i, frac, r) {
+    const a = starts[i] + arcAngles[i]*frac;
+    return [cx + r*Math.cos(a), cy + r*Math.sin(a)];
+  }
+
+  DOMAINS.forEach((d,i) => {
+    const a0 = starts[i], a1 = a0+arcAngles[i];
+    const x0 = cx+R*Math.cos(a0), y0 = cy+R*Math.sin(a0);
+    const x1 = cx+R*Math.cos(a1), y1 = cy+R*Math.sin(a1);
+    const large = arcAngles[i] > Math.PI ? 1 : 0;
+    const path = document.createElementNS("http://www.w3.org/2000/svg","path");
+    const r2 = R+14;
+    const x0o = cx+r2*Math.cos(a0), y0o = cy+r2*Math.sin(a0);
+    const x1o = cx+r2*Math.cos(a1), y1o = cy+r2*Math.sin(a1);
+    path.setAttribute("d",`M${x0} ${y0} A${R} ${R} 0 ${large} 1 ${x1} ${y1} L${x1o} ${y1o} A${r2} ${r2} 0 ${large} 0 ${x0o} ${y0o} Z`);
+    path.setAttribute("fill", d.color);
+    path.setAttribute("opacity","0.9");
+    svg.appendChild(path);
+
+    const am = arcMid(i);
+    const lr = r2 + 22;
+    const tx = cx + lr*Math.cos(am);
+    const ty = cy + lr*Math.sin(am);
+    const txt = document.createElementNS("http://www.w3.org/2000/svg","text");
+    txt.setAttribute("x", tx); txt.setAttribute("y", ty);
+    txt.setAttribute("text-anchor","middle"); txt.setAttribute("dominant-baseline","central");
+    txt.setAttribute("font-size","11"); txt.setAttribute("font-weight","500");
+    txt.setAttribute("fill", d.color);
+    txt.setAttribute("font-family","var(--font-sans,sans-serif)");
+    txt.textContent = d.label;
+    svg.appendChild(txt);
+
+    const cntTxt = document.createElementNS("http://www.w3.org/2000/svg","text");
+    cntTxt.setAttribute("x", cx+(lr+16)*Math.cos(am));
+    cntTxt.setAttribute("y", cy+(lr+16)*Math.sin(am));
+    cntTxt.setAttribute("text-anchor","middle"); cntTxt.setAttribute("dominant-baseline","central");
+    cntTxt.setAttribute("font-size","10"); cntTxt.setAttribute("fill","var(--color-text-secondary)");
+    cntTxt.setAttribute("font-family","var(--font-sans,sans-serif)");
+    cntTxt.textContent = totals[i];
+    svg.appendChild(cntTxt);
+  });
+
+  DOMAINS.forEach((da,i) => {
+    DOMAINS.forEach((db,j) => {
+      if (j <= i) return;
+      const cnt = getCount(da.key, db.key);
+      if (cnt === 0) return;
+      const w = Math.max(1, cnt * 1.6);
+      const p1 = ptOnArc(i, 0.5, R);
+      const p2 = ptOnArc(j, 0.5, R);
+      const chord = document.createElementNS("http://www.w3.org/2000/svg","path");
+      const mx = cx, my = cy;
+      chord.setAttribute("d",`M${p1[0]} ${p1[1]} Q${mx} ${my} ${p2[0]} ${p2[1]}`);
+      chord.setAttribute("fill","none");
+      chord.setAttribute("stroke", da.color);
+      chord.setAttribute("stroke-width", w);
+      chord.setAttribute("opacity", 0.25 + cnt*0.04);
+      svg.appendChild(chord);
+
+      const lx = (p1[0]+p2[0])/2*0.5 + cx*0.5;
+      const ly = (p1[1]+p2[1])/2*0.5 + cy*0.5;
+      const lbl = document.createElementNS("http://www.w3.org/2000/svg","text");
+      lbl.setAttribute("x",lx); lbl.setAttribute("y",ly);
+      lbl.setAttribute("text-anchor","middle"); lbl.setAttribute("dominant-baseline","central");
+      lbl.setAttribute("font-size","10"); lbl.setAttribute("font-weight","500");
+      lbl.setAttribute("fill","var(--color-text-primary)"); lbl.setAttribute("opacity","0.7");
+      lbl.setAttribute("font-family","var(--font-sans,sans-serif)");
+      lbl.textContent = cnt;
+      svg.appendChild(lbl);
+    });
+  });
+
+  document.getElementById('chord-wrap').appendChild(svg);
+}
+
+function drawBar() {
+  const pairs = [];
+  DOMAINS.forEach((da,i) => {
+    DOMAINS.forEach((db,j) => {
+      if (j<=i) return;
+      const cnt = getCount(da.key,db.key);
+      if (cnt>0) pairs.push({ label: `${da.label} ↔ ${db.label}`, count: cnt, color: da.color });
+    });
+  });
+  pairs.sort((a,b)=>b.count-a.count);
+
+  new Chart(document.getElementById('barChart'), {
+    type:'bar',
+    data:{
+      labels: pairs.map(p=>p.label),
+      datasets:[{
+        data: pairs.map(p=>p.count),
+        backgroundColor: pairs.map(p=>p.color+'cc'),
+        borderColor: pairs.map(p=>p.color),
+        borderWidth: 1,
+        borderRadius: 4
+      }]
+    },
+    options:{
+      indexAxis:'y',
+      responsive:true,
+      maintainAspectRatio:false,
+      plugins:{ legend:{display:false}, tooltip:{callbacks:{label: ctx=>' '+ctx.raw+' connections'}}},
+      scales:{
+        x:{ beginAtZero:true, max:10, grid:{color:'rgba(128,128,128,0.12)'}, ticks:{color:'#888', font:{size:11}, stepSize:2} },
+        y:{ grid:{display:false}, ticks:{color:'#555', font:{size:11}} }
+      }
+    }
+  });
+}
+
+function drawMatrix() {
+  const wrap = document.getElementById('matrix-wrap');
+  const sz = 48;
+  const pad = 80;
+  const W = DOMAINS.length*sz + pad;
+  const H = DOMAINS.length*sz + pad;
+
+  const svg = document.createElementNS("http://www.w3.org/2000/svg","svg");
+  svg.setAttribute("viewBox",`0 0 ${W} ${H}`);
+  svg.setAttribute("width","100%");
+  svg.style.display="block";
+
+  const maxVal = Math.max(...Object.values(LINKS));
+
+  DOMAINS.forEach((d,i) => {
+    const xt = document.createElementNS("http://www.w3.org/2000/svg","text");
+    xt.setAttribute("x", pad + i*sz + sz/2); xt.setAttribute("y", 36);
+    xt.setAttribute("text-anchor","middle"); xt.setAttribute("font-size","10");
+    xt.setAttribute("font-weight","500"); xt.setAttribute("fill", d.color);
+    xt.setAttribute("font-family","var(--font-sans,sans-serif)");
+    xt.textContent = d.key;
+    svg.appendChild(xt);
+
+    const yt = document.createElementNS("http://www.w3.org/2000/svg","text");
+    yt.setAttribute("x", pad-8); yt.setAttribute("y", pad + i*sz + sz/2);
+    yt.setAttribute("text-anchor","end"); yt.setAttribute("dominant-baseline","central");
+    yt.setAttribute("font-size","10"); yt.setAttribute("font-weight","500");
+    yt.setAttribute("fill", d.color);
+    yt.setAttribute("font-family","var(--font-sans,sans-serif)");
+    yt.textContent = d.key;
+    svg.appendChild(yt);
+  });
+
+  DOMAINS.forEach((da,i) => {
+    DOMAINS.forEach((db,j) => {
+      const cnt = i===j ? 0 : getCount(da.key, db.key);
+      const alpha = i===j ? 0.06 : cnt===0 ? 0.05 : 0.15 + (cnt/maxVal)*0.75;
+      const fill = i===j ? '#888' : cnt===0 ? '#ccc' : da.color;
+
+      const rect = document.createElementNS("http://www.w3.org/2000/svg","rect");
+      rect.setAttribute("x", pad+j*sz+2); rect.setAttribute("y", pad+i*sz+2);
+      rect.setAttribute("width", sz-4); rect.setAttribute("height", sz-4);
+      rect.setAttribute("rx","6"); rect.setAttribute("fill", fill);
+      rect.setAttribute("opacity", alpha);
+      svg.appendChild(rect);
+
+      if (cnt > 0) {
+        const t = document.createElementNS("http://www.w3.org/2000/svg","text");
+        t.setAttribute("x", pad+j*sz+sz/2); t.setAttribute("y", pad+i*sz+sz/2);
+        t.setAttribute("text-anchor","middle"); t.setAttribute("dominant-baseline","central");
+        t.setAttribute("font-size","13"); t.setAttribute("font-weight","500");
+        t.setAttribute("fill", da.color); t.setAttribute("opacity","0.9");
+        t.setAttribute("font-family","var(--font-sans,sans-serif)");
+        t.textContent = cnt;
+        svg.appendChild(t);
+      }
+    });
+  });
+
+  const legend = document.createElementNS("http://www.w3.org/2000/svg","text");
+  legend.setAttribute("x",W/2); legend.setAttribute("y",H-8);
+  legend.setAttribute("text-anchor","middle"); legend.setAttribute("font-size","10");
+  legend.setAttribute("fill","var(--color-text-secondary)");
+  legend.setAttribute("font-family","var(--font-sans,sans-serif)");
+  legend.textContent="Numbers = cross-domain connection count · Shading = intensity";
+  svg.appendChild(legend);
+
+  wrap.appendChild(svg);
+}
+
+drawChord();
+</script>
